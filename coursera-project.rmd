@@ -1,0 +1,168 @@
+---
+title: "Practical Machine Learning - Coursera"
+author: "Mustofa Husni Sanoval"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(caret)
+library(randomForest)
+library(dplyr)
+library(rattle)
+```
+
+# Introduction
+This project aims to predict the manner in which individuals perform weight lifting exercises. The dataset contains accelerometer readings from sensors placed on the belt, forearm, arm, and dumbbell of six participants performing barbell lifts correctly and incorrectly in five different ways. The goal is to develop a machine learning model that can accurately classify these movements into five categories (A, B, C, D, or E). We will use Decision Tree and Random Forest models and evaluate their performance using cross-validation.
+
+# Load Data
+```{r load-data}
+training <- read.csv("./pml-training.csv", na.strings = c("NA", "#DIV/0!", ""))
+testing <- read.csv("./pml-testing.csv", na.strings = c("NA", "#DIV/0!", ""))
+
+# Data dimensions
+dim(training)
+dim(testing)
+```
+
+# Data Preprocessing
+To ensure the dataset is clean and suitable for training, we perform the following preprocessing steps:
+1. **Split the training set** into 70% training and 30% testing.
+2. **Remove near-zero variance predictors**, as they contribute little to the model.
+3. **Remove columns with more than 50% missing values**.
+4. **Ensure consistency** between the training and test datasets.
+
+```{r data-preprocessing}
+set.seed(12345)
+
+# Split training data
+inTrain <- createDataPartition(y = training$classe, p = 0.7, list = FALSE)
+training.set <- training[inTrain,]
+testing.set <- training[-inTrain,]
+
+# Remove near-zero variance predictors
+nzv <- nearZeroVar(training.set, saveMetrics = TRUE)
+
+# Remove columns with more than 50% missing values
+ind.NA <- colSums(is.na(training.set)) < (0.5 * nrow(training.set))
+
+# Select only relevant columns
+valid_columns <- ind.NA & !nzv$nzv
+training.set <- training.set[, valid_columns]
+testing.set <- testing.set[, valid_columns]
+testing <- testing[, valid_columns]
+
+# Remove ID columns
+training.set <- training.set[, -1]
+testing.set <- testing.set[, -1]
+testing <- testing[, -1]
+```
+
+# Data Consistency Check
+To avoid inconsistencies between datasets, we ensure that:
+- The data types match.
+- Factor levels are standardized.
+- No columns have all missing values in the test dataset.
+
+```{r data-consistency}
+# Ensure data types match across datasets
+training.set <- training.set %>% mutate_if(is.character, as.factor)
+testing.set <- testing.set %>% mutate_if(is.character, as.factor)
+testing <- testing %>% mutate_if(is.character, as.factor)
+
+# Ensure column names are identical
+print(setdiff(colnames(training.set), colnames(testing))) # Columns in training but not in testing
+print(setdiff(colnames(testing), colnames(training.set))) # Columns in testing but not in training
+
+# Standardize factor levels
+for (col in colnames(training.set)) {
+  if (is.factor(training.set[[col]])) {
+    if (col %in% colnames(testing)) { 
+      new_levels <- unique(c(levels(training.set[[col]]), levels(as.factor(testing[[col]]))))
+      training.set[[col]] <- factor(training.set[[col]], levels = new_levels)
+      testing[[col]] <- factor(testing[[col]], levels = new_levels)
+    }
+  }
+}
+
+# Remove columns with all NA values in testing
+testing <- testing[, colSums(is.na(testing)) < nrow(testing)]
+
+# Ensure consistency
+print(all(colnames(training.set) == colnames(testing)))
+```
+
+# Train Decision Tree
+A Decision Tree is a simple yet interpretable model. We use it as a baseline before moving to more complex models.
+
+```{r train-decision-tree}
+set.seed(12345)
+tree.fit <- train(y = training.set$classe,
+                  x = training.set[, -ncol(training.set)],
+                  method = "rpart")
+
+# Plot decision tree
+rattle::fancyRpartPlot(tree.fit$finalModel)
+```
+
+# Decision Tree Predictions
+The model's performance is evaluated using a confusion matrix.
+```{r decision-tree-predictions}
+pred.tree <- predict(tree.fit, testing.set[, -ncol(testing.set)])
+pred.tree <- factor(pred.tree, levels = levels(training.set$classe))
+testing.set$classe <- factor(testing.set$classe, levels = levels(training.set$classe))
+
+# Confusion Matrix for Decision Tree
+conf.tree <- confusionMatrix(pred.tree, testing.set$classe)
+print(conf.tree)
+
+# Accuracy & Kappa
+print(paste("Accuracy:", conf.tree$overall["Accuracy"]))
+print(paste("Kappa:", conf.tree$overall["Kappa"]))
+```
+
+# Train Random Forest Model
+Random Forest is chosen for its high accuracy and ability to handle complex relationships.
+```{r train-random-forest}
+set.seed(12345)
+rf.fit <- randomForest(classe ~ ., data = training.set, ntree = 250)
+
+# Plot Random Forest Model
+plot(rf.fit)
+```
+
+# Random Forest Predictions
+```{r random-forest-predictions}
+pred.rf <- predict(rf.fit, testing.set[, -ncol(testing.set)])
+pred.rf <- factor(pred.rf, levels = levels(training.set$classe))
+testing.set$classe <- factor(testing.set$classe, levels = levels(training.set$classe))
+
+# Confusion Matrix for Random Forest
+conf.rf <- confusionMatrix(pred.rf, testing.set$classe)
+print(conf.rf)
+
+# Accuracy & Kappa
+print(paste("Accuracy:", conf.rf$overall["Accuracy"]))
+print(paste("Kappa:", conf.rf$overall["Kappa"]))
+```
+
+# Predict for Test Dataset
+Finally, we apply the trained model to the test dataset and save the predictions.
+```{r predict-test-dataset}
+pred.validation <- predict(rf.fit, testing)
+
+# Save predictions
+testing$pred.classe <- pred.validation
+write.table(
+  pred.validation,
+  file = "predictions.txt",
+  quote = FALSE,
+  row.names = FALSE,
+  col.names = FALSE
+)
+```
+
+# Conclusion
+This report describes the steps taken to clean the dataset, train machine learning models, and evaluate their performance. We used a Decision Tree as a baseline and then applied a Random Forest model, which demonstrated higher accuracy. The final predictions were saved for submission. Future improvements could involve hyperparameter tuning or using other ensemble methods.
